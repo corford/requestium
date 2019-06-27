@@ -1,10 +1,6 @@
 # Always prefer setuptools over distutils
 from setuptools import setup
 
-# Get the long description from the README file
-with open('README.md') as file:
-    long_description = file.read()
-
 setup(
     name='requestium',
     version='0.1.9',
@@ -13,7 +9,7 @@ setup(
         "object, and makes switching between them seamless. Handles cookie, "
         "proxy and header transfer."
     ),
-    long_description=long_description,
+    long_description='',
     author='Joaquin Alori',
     author_email='joaquin@tryolabs.com',
     url='https://github.com/tryolabs/requestium',
