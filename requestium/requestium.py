@@ -1,6 +1,8 @@
 import requests
 import time
 import tldextract
+import os
+import zipfile
 
 from functools import partial
 from parsel.selector import Selector
@@ -13,14 +15,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 class Session(requests.Session):
     """Class that adds a Selenium Webdriver and helper methods to a  Requests Session
-
     This session class is a normal Requests Session that has the ability to switch back
     and forth between this session and a webdriver, allowing us to run js when needed.
-
     Cookie transfer is done with the 'transfer' methods.
-
     Header and proxy transfer is done only one time when the driver process starts.
-
     Some useful helper methods and object wrappings have been added.
     """
 
@@ -74,9 +72,6 @@ class Session(requests.Session):
                                    default_timeout=self.default_timeout)
 
     def _start_chrome_browser(self):
-        # TODO transfer of proxies and headers: Not supported by chromedriver atm.
-        # Choosing not to use plug-ins for this as I don't want to worry about the
-        # extra dependencies and plug-ins don't work in headless mode. :-(
         chrome_options = webdriver.chrome.options.Options()
 
         if 'binary_location' in self.webdriver_options:
@@ -90,6 +85,86 @@ class Session(requests.Session):
                 raise Exception('A list is needed to use \'arguments\' option. Found {}'.format(
                     type(self.webdriver_options['arguments'])))
 
+        # If we are running in headless mode, only "authless" proxies specified as a chrome arg are supported
+        if 'headless' in self.webdriver_options['arguments']:
+            if self.proxies and ('proxy-server' not in self.webdriver_options['arguments']):
+                raise Exception('Only proxies set via a "proxy-server" chrome argument are supported in headless mode')
+
+        # If an "authless" proxy has been passed as an argument, prefer that.
+        # Otherwise, if a proxy config is available from requests, use an extension to set the corresponding config in chrome
+        # (borrowing an idea from: https://botproxy.net/docs/how-to/setting-chromedriver-proxy-auth-with-selenium-using-python/ )
+        if self.proxies and ('proxy-server' not in self.webdriver_options['arguments']):
+            proxy_conn_string = self.proxies['https'] or self.proxies['http']
+
+            proxy_scheme = proxy_conn_string.split('://')[0]
+            proxy_endpoint = proxy_conn_string.split('://')[1]
+            proxy_auth = proxy_endpoint.split('@')[0] if '@' in proxy_endpoint else False
+            proxy_addr = proxy_endpoint.split('@')[1] if proxy_auth else proxy_endpoint
+
+            proxy_user = proxy_auth.split(':')[0] if proxy_auth else ""
+            proxy_pass = proxy_auth.split(':')[1] if proxy_auth and (':' in proxy_auth) else ""
+            proxy_host = proxy_addr.split(':')[0]
+            proxy_port = proxy_addr.split(':')[1]
+
+            manifest_json = """
+            {
+                "version": "1.0.0",
+                "manifest_version": 2,
+                "name": "Chrome Proxy",
+                "permissions": [
+                    "proxy",
+                    "tabs",
+                    "unlimitedStorage",
+                    "storage",
+                    "<all_urls>",
+                    "webRequest",
+                    "webRequestBlocking"
+                ],
+                "background": {
+                    "scripts": ["background.js"]
+                },
+                "minimum_chrome_version":"22.0.0"
+            }
+            """
+
+            background_js = """
+            var config = {
+                    mode: "fixed_servers",
+                    rules: {
+                    singleProxy: {
+                        scheme: "%s",
+                        host: "%s",
+                        port: parseInt(%s)
+                    },
+                    bypassList: ["localhost"]
+                    }
+                };
+            chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+            function callbackFn(details) {
+                return {
+                    authCredentials: {
+                        username: "%s",
+                        password: "%s"
+                    }
+                };
+            }
+            chrome.webRequest.onAuthRequired.addListener(
+                        callbackFn,
+                        {urls: ["<all_urls>"]},
+                        ['blocking']
+            );
+            """ % (proxy_scheme, proxy_host, proxy_port, proxy_user, proxy_pass)
+
+            extension_file = "/tmp/selenium_chrome_proxy_auth_extension.{time}.zip".format(
+                time=str(time.time())
+            )
+
+            with zipfile.ZipFile(extension_file, 'w') as zp:
+                zp.writestr("manifest.json", manifest_json)
+                zp.writestr("background.js", background_js)
+
+            chrome_options.add_extension(extension_file)
+
         # Create driver process
         return RequestiumChrome(self.webdriver_path,
                                 chrome_options=chrome_options,
@@ -97,7 +172,6 @@ class Session(requests.Session):
 
     def transfer_session_cookies_to_driver(self, domain=None):
         """Copies the Session's cookies into the webdriver
-
         Using the 'domain' parameter we choose the cookies we wish to transfer, we only
         transfer the cookies which belong to that domain. The domain defaults to our last visited
         site if not provided.
@@ -137,7 +211,6 @@ class Session(requests.Session):
 
     def copy_user_agent_from_driver(self):
         """ Updates requests' session user-agent with the driver's user agent
-
         This method will start the browser process if its not already running.
         """
         selenium_user_agent = self.driver.execute_script("return navigator.userAgent;")
@@ -175,13 +248,10 @@ class RequestiumResponse(object):
 
 class DriverMixin(object):
     """Provides helper methods to our driver classes
-
     This is a temporary solution.
-
     When Chrome headless is finally stable, and we therefore stop using Phantomjs,
     it will make sense to stop having this as a mixin and just add these methods to
     the RequestiumChrome class, as it will be our only driver class.
-
     (We plan to stop supporting Phantomjs because the developer stated he won't be
     maintaining the project any longer)
     """
@@ -193,16 +263,12 @@ class DriverMixin(object):
 
     def ensure_add_cookie(self, cookie, override_domain=None):
         """Ensures a cookie gets added to the driver
-
         Selenium needs the driver to be currently at the domain of the cookie
         before allowing you to add it, so we need to get through this limitation.
-
         The cookie parameter is a dict which must contain the keys (name, value, domain) and
         may contain the keys (path, expiry).
-
         We first check that we aren't currently in the cookie's domain, if we aren't, we GET
         the cookie's domain and then add the cookies to the driver.
-
         We can override the cookie's domain using 'override_domain'. The use for this
         parameter is that sometimes GETting the cookie's domain redirects you to a different
         sub domain, and therefore adding the cookie fails. So sometimes the user may
@@ -210,7 +276,6 @@ class DriverMixin(object):
         'home.site.com', in this way even if the site redirects us to a subdomain, the cookie will
         stick. If you set the domain to '', the cookie gets added with whatever domain the browser
         is currently at (at least in chrome it does), so this ensures the cookie gets added.
-
         It also retries adding the cookie with a more permissive domain if it fails in the first
         try, and raises an exception if that fails. The standard selenium behaviour in this case
         was to not do anything, which was very hard to debug.
@@ -245,7 +310,6 @@ class DriverMixin(object):
 
     def is_cookie_in_driver(self, cookie):
         """We check that the cookie is correctly added to the driver
-
         We only compare name, value and domain, as the rest can produce false negatives.
         We are a bit lenient when comparing domains.
         """
@@ -283,21 +347,17 @@ class DriverMixin(object):
 
     def ensure_element(self, locator, selector, state="present", timeout=None):
         """This method allows us to wait till an element appears or disappears in the browser
-
         The webdriver runs in parallel with our scripts, so we must wait for it everytime it
         runs javascript. Selenium automatically waits till a page loads when GETing it,
         but it doesn't do this when it runs javascript and makes AJAX requests.
         So we must explicitly wait in that case.
-
         The 'locator' argument defines what strategy we use to search for the element.
-
         The 'state' argument allows us to chose between waiting for the element to be visible,
         clickable, present, or invisible. Presence is more inclusive, but sometimes we want to
         know if the element is visible. Careful, its not always intuitive what Selenium considers
         to be a visible element. We can also wait for it to be clickable, although this method
         is a bit buggy in selenium, an element can be 'clickable' according to selenium and 
         still fail when we try to click it.
-
         More info at: http://selenium-python.readthedocs.io/waits.html
         """
         locators = {'id': By.ID,
@@ -344,7 +404,6 @@ class DriverMixin(object):
     @property
     def selector(self):
         """Returns the current state of the browser in a Selector
-
         We re-parse the site on each xpath, css, re call because we are running a web browser
         and the site may change between calls"""
         return Selector(text=self.page_source)
@@ -364,10 +423,8 @@ class DriverMixin(object):
 
 def _ensure_click(self):
     """Ensures a click gets made, because Selenium can be a bit buggy about clicks
-
     This method gets added to the selenium element returned in '__ensure_element_by_xpath'.
     We should probably add it to more selenium methods, such as all the 'find**' methods though.
-
     I wrote this method out of frustration with chromedriver and its problems with clicking
     items that need to be scrolled to in order to be clickable. In '__ensure_element_by_xpath' we
     scroll to the item before returning it, but chrome has some problems if it doesn't get some
@@ -406,4 +463,4 @@ class RequestiumPhantomJS(DriverMixin, webdriver.PhantomJS):
 
 
 class RequestiumChrome(DriverMixin, webdriver.Chrome):
-    pass
+pass
