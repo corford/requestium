@@ -464,4 +464,4 @@ class RequestiumPhantomJS(DriverMixin, webdriver.PhantomJS):
 
 
 class RequestiumChrome(DriverMixin, webdriver.Chrome):
-pass
+    pass
