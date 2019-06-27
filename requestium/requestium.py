@@ -3,6 +3,7 @@ import time
 import tldextract
 import os
 import zipfile
+import textwrap
 
 from functools import partial
 from parsel.selector import Selector
@@ -106,54 +107,54 @@ class Session(requests.Session):
             proxy_host = proxy_addr.split(':')[0]
             proxy_port = proxy_addr.split(':')[1]
 
-            manifest_json = """
-            {
-                "version": "1.0.0",
-                "manifest_version": 2,
-                "name": "Chrome Proxy",
-                "permissions": [
-                    "proxy",
-                    "tabs",
-                    "unlimitedStorage",
-                    "storage",
-                    "<all_urls>",
-                    "webRequest",
-                    "webRequestBlocking"
-                ],
-                "background": {
-                    "scripts": ["background.js"]
-                },
-                "minimum_chrome_version":"22.0.0"
-            }
-            """
-
-            background_js = """
-            var config = {
-                    mode: "fixed_servers",
-                    rules: {
-                    singleProxy: {
-                        scheme: "%s",
-                        host: "%s",
-                        port: parseInt(%s)
+            manifest_json = textwrap.dedent("""\
+                {
+                    "version": "1.0.0",
+                    "manifest_version": 2,
+                    "name": "Chrome Proxy",
+                    "permissions": [
+                        "proxy",
+                        "tabs",
+                        "unlimitedStorage",
+                        "storage",
+                        "<all_urls>",
+                        "webRequest",
+                        "webRequestBlocking"
+                    ],
+                    "background": {
+                        "scripts": ["background.js"]
                     },
-                    bypassList: ["localhost"]
-                    }
-                };
-            chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
-            function callbackFn(details) {
-                return {
-                    authCredentials: {
-                        username: "%s",
-                        password: "%s"
-                    }
-                };
-            }
-            chrome.webRequest.onAuthRequired.addListener(
-                        callbackFn,
-                        {urls: ["<all_urls>"]},
-                        ['blocking']
-            );
-            """ % (proxy_scheme, proxy_host, proxy_port, proxy_user, proxy_pass)
+                    "minimum_chrome_version":"22.0.0"
+                }
+                """)
+
+            background_js = textwrap.dedent("""\
+                var config = {
+                        mode: "fixed_servers",
+                        rules: {
+                        singleProxy: {
+                            scheme: "%s",
+                            host: "%s",
+                            port: parseInt(%s)
+                        },
+                        bypassList: ["localhost"]
+                        }
+                    };
+                chrome.proxy.settings.set({value: config, scope: "regular"}, function() {});
+                function callbackFn(details) {
+                    return {
+                        authCredentials: {
+                            username: "%s",
+                            password: "%s"
+                        }
+                    };
+                }
+                chrome.webRequest.onAuthRequired.addListener(
+                            callbackFn,
+                            {urls: ["<all_urls>"]},
+                            ['blocking']
+                );
+                """ % (proxy_scheme, proxy_host, proxy_port, proxy_user, proxy_pass))
 
             extension_file = "/tmp/selenium_chrome_proxy_auth_extension.{time}.zip".format(
                 time=str(time.time())
