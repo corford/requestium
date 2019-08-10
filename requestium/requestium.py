@@ -77,6 +77,9 @@ class Session(requests.Session):
 
         if 'binary_location' in self.webdriver_options:
             chrome_options.binary_location = self.webdriver_options['binary_location']
+        
+        if 'accept_insecure_certs' in self.webdriver_options:
+            chrome_options.set_capability("acceptInsecureCerts", True)
 
         if 'arguments' in self.webdriver_options:
             if isinstance(self.webdriver_options['arguments'], list):
