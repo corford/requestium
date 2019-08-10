@@ -80,6 +80,7 @@ class Session(requests.Session):
         
         if 'accept_insecure_certs' in self.webdriver_options:
             chrome_options.set_capability("acceptInsecureCerts", True)
+            chrome_options.set_capability("acceptSslCerts", True)
 
         if 'arguments' in self.webdriver_options:
             if isinstance(self.webdriver_options['arguments'], list):
